@@ -1,0 +1,109 @@
+name: Build Android Release APK
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-release-apk:
+    name: Build & Sign Release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          add-job-summary: 'on-failure'
+          add-job-summary-as-pr-comment: 'never'
+
+      - name: Prepare Build Environment & Secrets
+        run: |
+          echo "Preparing local environment files..."
+          touch .env && touch .env.example
+          
+          if [ ! -f "gradlew" ]; then
+            echo "gradlew not found. Generating gradle wrapper..."
+            gradle wrapper
+          fi
+          chmod +x gradlew || true
+
+      - name: Configure Keystore & Detect Key Alias
+        run: |
+          KEYSTORE_FILE="my-upload-key.jks"
+          DEFAULT_ALIAS="upload"
+          DEFAULT_PASS="android"
+          
+          STORE_PASS="${STORE_PASSWORD:-$DEFAULT_PASS}"
+          KEY_PASS="${KEY_PASSWORD:-$DEFAULT_PASS}"
+
+          if [ ! -f "$KEYSTORE_FILE" ]; then
+            echo "No existing keystore found. Generating automated release keystore..."
+            keytool -genkeypair -v -keystore "$KEYSTORE_FILE" -alias "$DEFAULT_ALIAS" \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$STORE_PASS" -keypass "$KEY_PASS" \
+              -dname "CN=ChatPro, OU=Engineering, O=ChatPro, L=Havana, ST=Havana, C=CU"
+            DETECTED_ALIAS="$DEFAULT_ALIAS"
+          else
+            echo "Inspecting alias from existing keystore ($KEYSTORE_FILE)..."
+            # Extract first alias name dynamically using keytool
+            DETECTED_ALIAS=$(keytool -list -v -keystore "$KEYSTORE_FILE" -storepass "$STORE_PASS" 2>/dev/null | grep -i "Alias name:" | head -n 1 | awk -F': ' '{print $2}' | xargs)
+            if [ -z "$DETECTED_ALIAS" ]; then
+              echo "Warning: Unable to parse alias via keytool. Falling back to default: $DEFAULT_ALIAS"
+              DETECTED_ALIAS="$DEFAULT_ALIAS"
+            fi
+          fi
+
+          echo "Keystore configured successfully with alias: $DETECTED_ALIAS"
+
+          # Export environment variables for Gradle build
+          echo "KEY_ALIAS=$DETECTED_ALIAS" >> $GITHUB_ENV
+          echo "STORE_PASSWORD=$STORE_PASS" >> $GITHUB_ENV
+          echo "KEY_PASSWORD=$KEY_PASS" >> $GITHUB_ENV
+          echo "KEYSTORE_PATH=$GITHUB_WORKSPACE/$KEYSTORE_FILE" >> $GITHUB_ENV
+
+          # Place redundant copy in app/ module
+          mkdir -p app
+          cp -f "$KEYSTORE_FILE" "app/$KEYSTORE_FILE"
+
+      - name: Build Release APK
+        run: |
+          ./gradlew :app:assembleRelease --no-daemon \
+            -Dkotlin.compiler.execution.strategy=daemon \
+            -Dksp.incremental=false \
+            -Dksp.incremental.intermodule=false \
+            --stacktrace
+
+      - name: Verify Release APK Output
+        run: |
+          echo "Inspecting release build output folder..."
+          ls -la app/build/outputs/apk/release/
+          if ! ls app/build/outputs/apk/release/*.apk 1> /dev/null 2>&1; then
+            echo "ERROR: Release APK was not generated in app/build/outputs/apk/release/!"
+            exit 1
+          fi
+          echo "Signed Release APK successfully verified."
+
+      - name: Upload Release APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk
+          path: app/build/outputs/apk/release/*.apk
+          retention-days: 30

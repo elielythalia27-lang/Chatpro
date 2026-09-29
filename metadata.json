@@ -1,0 +1,6 @@
+{
+  "name": "ChatPro",
+  "description": "Aplicación de mensajería premium en tiempo real con cifrado, estados, canales y panel de administración.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

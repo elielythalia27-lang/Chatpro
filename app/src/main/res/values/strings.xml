@@ -1,0 +1,65 @@
+<resources>
+    <string name="app_name">ChatPro</string>
+    <string name="slogan">Mensajería rápida, privada y segura</string>
+    
+    <!-- Auth & Register -->
+    <string name="login_title">Iniciar Sesión</string>
+    <string name="register_title">Crear Cuenta</string>
+    <string name="username_label">@usuario</string>
+    <string name="password_label">Contraseña</string>
+    <string name="display_name_label">Nombre completo</string>
+    <string name="email_label">Correo electrónico (opcional)</string>
+    <string name="login_button">Entrar a ChatPro</string>
+    <string name="register_button">Registrarse en ChatPro</string>
+    <string name="no_account">¿No tienes cuenta? Regístrate</string>
+    <string name="already_account">¿Ya tienes cuenta? Inicia sesión</string>
+    <string name="username_available">Nombre de usuario disponible</string>
+    <string name="username_taken">Este nombre de usuario ya está en uso, por favor prueba con otro</string>
+    <string name="username_checking">Verificando disponibilidad…</string>
+    
+    <!-- Navigation Tabs -->
+    <string name="tab_chats">Chats</string>
+    <string name="tab_contacts">Contactos</string>
+    <string name="tab_status">Estados</string>
+    <string name="tab_settings">Ajustes</string>
+    <string name="directory_title">Directorio</string>
+    
+    <!-- Chat Screen -->
+    <string name="online_status">en línea</string>
+    <string name="offline_status">últ. vez hace poco</string>
+    <string name="type_message_hint">Escribe un mensaje…</string>
+    <string name="sending">Enviando…</string>
+    <string name="sent">Enviado</string>
+    <string name="read">Leído</string>
+    <string name="replying_to">Respondiendo a %s</string>
+    <string name="recording_audio">Grabando nota de voz…</string>
+    <string name="voice_message">Nota de voz</string>
+    <string name="file_attachment">Archivo</string>
+    <string name="photo_attachment">Foto</string>
+    
+    <!-- Statuses -->
+    <string name="my_status">Mi estado</string>
+    <string name="add_status">Añadir estado</string>
+    <string name="recent_updates">Estados recientes</string>
+    <string name="viewed_by">Visto por %d personas</string>
+    <string name="reply_status">Responder al estado…</string>
+    
+    <!-- Generic Connection & Errors (Zero Moodle references) -->
+    <string name="network_error">Sin conexión a ChatPro</string>
+    <string name="reconnecting">Reintentando conexión con ChatPro…</string>
+    <string name="maintenance">ChatPro está en mantenimiento</string>
+    <string name="syncing_active">ChatPro sincronizando en tiempo real</string>
+    <string name="file_size_error">El archivo supera el límite de 4MB</string>
+    <string name="security_integrity_error">Error de integridad de ChatPro</string>
+    
+    <!-- Multi Account & Profile -->
+    <string name="switch_account">Cambiar de Cuenta</string>
+    <string name="add_account">Añadir Cuenta</string>
+    <string name="active_account">Cuenta activa</string>
+    <string name="admin_panel">Panel de Administración</string>
+    <string name="security_settings">Seguridad y Cifrado</string>
+    <string name="appearance">Tema y Apariencia</string>
+    <string name="notifications">Notificaciones</string>
+    <string name="logout">Cerrar Sesión</string>
+    <string name="delete_account">Eliminar Cuenta</string>
+</resources>
