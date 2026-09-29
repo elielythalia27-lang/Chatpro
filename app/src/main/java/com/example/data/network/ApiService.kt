@@ -35,6 +35,22 @@ data class RemoteUploadItem(
 )
 
 @JsonClass(generateAdapter = true)
+data class PrepareDraftResponse(
+    @Json(name = "draftitemid") val draftItemId: Long? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class UnusedDraftItemIdResponse(
+    @Json(name = "itemid") val itemId: Long? = null,
+    @Json(name = "contextid") val contextId: Long? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class UpdatePrivateFilesResponse(
+    @Json(name = "status") val status: Boolean? = null
+)
+
+@JsonClass(generateAdapter = true)
 data class RemoteFileListResponse(
     @Json(name = "files") val files: List<RemoteFileItem> = emptyList(),
     @Json(name = "parents") val parents: List<RemoteFileItem> = emptyList()
@@ -61,12 +77,39 @@ interface ApiService {
     ): Response<RemoteTokenResponse>
 
     @FormUrlEncoded
-    @POST("login/token.php")
-    suspend fun requestToken(
-        @Field("username") user: String,
-        @Field("password") pass: String,
-        @Field("service") service: String = "moodle_mobile_app"
-    ): Response<RemoteTokenResponse>
+    @POST("webservice/rest/server.php")
+    suspend fun preparePrivateFiles(
+        @Query("wstoken") token: String,
+        @Query("moodlewsrestformat") format: String = "json",
+        @Field("wsfunction") wsFunction: String = "core_user_prepare_private_files_for_edition"
+    ): Response<PrepareDraftResponse>
+
+    @FormUrlEncoded
+    @POST("webservice/rest/server.php")
+    suspend fun getUnusedDraftItemId(
+        @Query("wstoken") token: String,
+        @Query("moodlewsrestformat") format: String = "json",
+        @Field("wsfunction") wsFunction: String = "core_files_get_unused_draft_itemid"
+    ): Response<UnusedDraftItemIdResponse>
+
+    @Multipart
+    @POST("webservice/upload.php")
+    suspend fun uploadDraftFile(
+        @Query("token") token: String,
+        @Query("itemid") itemId: Long,
+        @Part file: MultipartBody.Part,
+        @Part("filepath") filepath: RequestBody,
+        @Part("filearea") filearea: RequestBody
+    ): Response<List<RemoteUploadItem>>
+
+    @FormUrlEncoded
+    @POST("webservice/rest/server.php")
+    suspend fun savePrivateFiles(
+        @Query("wstoken") token: String,
+        @Query("moodlewsrestformat") format: String = "json",
+        @Field("wsfunction") wsFunction: String = "core_user_update_private_files",
+        @Field("draftitemid") draftItemId: Long
+    ): Response<UpdatePrivateFilesResponse>
 
     @Multipart
     @POST("webservice/upload.php")
@@ -110,25 +153,5 @@ interface ApiService {
         @Field("itemid") itemId: Int = 0,
         @Field("filepath") filepath: String = "/",
         @Field("filename") filename: String = ""
-    ): Response<ResponseBody>
-
-    @FormUrlEncoded
-    @POST("webservice/rest/server.php")
-    suspend fun eliminarArchivo(
-        @Query("wstoken") token: String,
-        @Query("moodlewsrestformat") format: String = "json",
-        @Field("wsfunction") wsFunction: String = "core_files_delete_draft_files",
-        @Field("draftitemid") draftItemId: Int = 0,
-        @Field("filepath") filepath: String = "/",
-        @Field("filename") filename: String = ""
-    ): Response<ResponseBody>
-
-    @FormUrlEncoded
-    @POST("webservice/rest/server.php")
-    suspend fun executeRestAction(
-        @Query("wstoken") token: String,
-        @Query("moodlewsrestformat") format: String = "json",
-        @Field("wsfunction") wsFunction: String,
-        @Field("params") params: String = ""
     ): Response<ResponseBody>
 }

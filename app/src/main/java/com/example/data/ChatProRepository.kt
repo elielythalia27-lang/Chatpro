@@ -148,29 +148,13 @@ class ChatProRepository(
         }
     }
 
-    suspend fun sendMessage(message: ChatMessage) = withContext(Dispatchers.IO) {
-        // 1. Immediately insert as SENDING for instant zero-wait UI feedback
-        val initialEntity = MessageEntity.fromChatMessage(message.copy(status = MessageStatus.SENDING))
-        database.messageDao().insertMessage(initialEntity)
-
-        // 2. Transmit through background coroutine to remote storage
-        scope.launch {
-            try {
-                // Upload message block to remote cloud storage
-                cloudStorage.uploadEncryptedBlock(
-                    filename = "msg_${message.id}.json",
-                    jsonPayload = message.text,
-                    folderPath = "/chatpro/mensajes/${message.chatId}/"
-                )
-            } catch (e: Exception) {
-                // Graceful fallback
-            }
-
-            delay(350L) // Instant confirmation
-            val confirmedEntity = initialEntity.copy(status = MessageStatus.SENT.name)
-            database.messageDao().updateMessage(confirmedEntity)
-            addLog("CHAT", "Mensaje sincronizado en chat ${message.chatId}")
-        }
+    suspend fun sendMessage(message: ChatMessage, mediaFile: File? = null) = withContext(Dispatchers.IO) {
+        // Upload to Moodle first (Sin encriptación).
+        // Si no se puede subir o falla la red, lanza una excepción y no guarda en local.
+        val uploaded = cloudStorage.uploadCommunityMessage(message, mediaFile)
+        val confirmedEntity = MessageEntity.fromChatMessage(uploaded.copy(status = MessageStatus.SENT))
+        database.messageDao().insertMessage(confirmedEntity)
+        addLog("CHAT", "Mensaje enviado a la Moodle de la UCF: ${uploaded.text.take(25)}")
     }
 
     suspend fun addReaction(messageId: String, username: String, emoji: String) = withContext(Dispatchers.IO) {
@@ -311,23 +295,14 @@ class ChatProRepository(
             timestamp = System.currentTimeMillis()
         )
 
-        // Save in Room immediately for instant zero-wait UI
-        database.postDao().insertPost(com.example.data.local.PostEntity.fromPost(initialPost))
+        // Upload to Moodle first (Sin encriptación).
+        // Si la subida falla, se lanza una excepción y no se guarda en local para evitar datos falsos.
+        val uploaded = cloudStorage.uploadPost(initialPost, mediaFile)
 
-        // Upload to Moodle in background and update URL once network responds
-        scope.launch {
-            try {
-                val uploaded = cloudStorage.uploadPost(initialPost, mediaFile)
-                if (uploaded.mediaUrl != initialPost.mediaUrl) {
-                    database.postDao().updatePost(com.example.data.local.PostEntity.fromPost(uploaded))
-                }
-                addLog("FEED", "Publicación sincronizada con Moodle por @$authorUsername")
-            } catch (e: Exception) {
-                // Keep local
-            }
-        }
-
-        initialPost
+        // Guardar en la base de datos local únicamente tras el éxito online en Moodle
+        database.postDao().insertPost(com.example.data.local.PostEntity.fromPost(uploaded))
+        addLog("FEED", "Publicación subida a la Moodle de la UCF por @$authorUsername")
+        uploaded
     }
 
     suspend fun toggleLikePost(postId: String, username: String) = withContext(Dispatchers.IO) {
@@ -366,11 +341,14 @@ class ChatProRepository(
     suspend fun postStatus(status: UserStatus) = withContext(Dispatchers.IO) {
         database.statusDao().insertStatus(StatusEntity.fromUserStatus(status))
         scope.launch {
-            cloudStorage.uploadEncryptedBlock(
-                filename = "${status.id}.json",
-                jsonPayload = status.text,
-                folderPath = "/chatpro/estados/"
-            )
+            try {
+                cloudStorage.uploadTextFile(
+                    filename = "status_${status.id}.json",
+                    content = status.text
+                )
+            } catch (e: Exception) {
+                // Ignore status upload errors
+            }
         }
         addLog("STATUS", "Nuevo estado publicado por ${status.authorDisplayName}")
     }

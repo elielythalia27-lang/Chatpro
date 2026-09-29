@@ -35,6 +35,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Comment
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AddPhotoAlternate
+import androidx.compose.material.icons.filled.BrokenImage
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Done
@@ -44,6 +45,7 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -82,6 +84,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
 import com.example.data.model.Post
 import com.example.data.model.PostMediaType
 import com.example.ui.theme.ChatProCardDark
@@ -125,6 +128,8 @@ fun FeedScreen(
     var selectedPhotoFile by remember { mutableStateOf<File?>(null) }
     var recordedAudioFile by remember { mutableStateOf<File?>(null) }
     var recordedAudioDuration by remember { mutableIntStateOf(0) }
+    var isSubmitting by remember { mutableStateOf(false) }
+    var submitErrorMessage by remember { mutableStateOf<String?>(null) }
 
     // Voice recording state
     val voiceRecorder = remember { VoiceRecorderHelper(context) }
@@ -168,6 +173,7 @@ fun FeedScreen(
 
     var postForComments by remember { mutableStateOf<Post?>(null) }
     var postForLikesDialog by remember { mutableStateOf<Post?>(null) }
+    var fullScreenImageUrl by remember { mutableStateOf<String?>(null) }
 
     LazyColumn(
         modifier = Modifier
@@ -413,7 +419,7 @@ fun FeedScreen(
                         val canSubmit = postText.isNotBlank() || selectedPhotoFile != null || recordedAudioFile != null
                         Button(
                             onClick = {
-                                if (canSubmit) {
+                                if (canSubmit && !isSubmitting) {
                                     keyboardController?.hide()
                                     focusManager.clearFocus()
 
@@ -423,28 +429,57 @@ fun FeedScreen(
                                         else -> PostMediaType.NONE
                                     }
                                     val mediaFile = selectedPhotoFile ?: recordedAudioFile
+                                    isSubmitting = true
+                                    submitErrorMessage = null
                                     viewModel.createPost(
                                         content = postText.trim(),
                                         mediaType = mediaType,
                                         mediaFile = mediaFile,
                                         audioDurationSeconds = recordedAudioDuration,
                                         onSuccess = {
+                                            isSubmitting = false
                                             postText = ""
                                             selectedPhotoFile = null
                                             recordedAudioFile = null
                                             recordedAudioDuration = 0
+                                            submitErrorMessage = null
+                                        },
+                                        onError = { err ->
+                                            isSubmitting = false
+                                            submitErrorMessage = err
                                         }
                                     )
                                 }
                             },
-                            enabled = canSubmit,
+                            enabled = canSubmit && !isSubmitting,
                             colors = ButtonDefaults.buttonColors(containerColor = ChatProTeal),
                             shape = RoundedCornerShape(20.dp),
                             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
                             modifier = Modifier.testTag("submit_post_button")
                         ) {
-                            Text("Publicar", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            if (isSubmitting) {
+                                androidx.compose.material3.CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    color = Color.Black,
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Publicando…", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            } else {
+                                Text("Publicar", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            }
                         }
+                    }
+
+                    if (submitErrorMessage != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = submitErrorMessage ?: "",
+                            color = Color(0xFFFF5252),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(horizontal = 4.dp)
+                        )
                     }
                 }
             }
@@ -484,6 +519,7 @@ fun FeedScreen(
                     onLike = { viewModel.toggleLikePost(post.id) },
                     onLikesCountClick = { postForLikesDialog = post },
                     onCommentClick = { postForComments = post },
+                    onImageClick = { fullScreenImageUrl = it },
                     onDelete = { viewModel.deletePost(post.id) }
                 )
                 Spacer(modifier = Modifier.height(12.dp))
@@ -516,6 +552,14 @@ fun FeedScreen(
             }
         )
     }
+
+    // Fullscreen Photo Viewer Dialog
+    if (fullScreenImageUrl != null) {
+        FullScreenPhotoDialog(
+            imageUrl = fullScreenImageUrl!!,
+            onDismiss = { fullScreenImageUrl = null }
+        )
+    }
 }
 
 @Composable
@@ -526,6 +570,7 @@ fun PostCard(
     onLike: () -> Unit,
     onLikesCountClick: () -> Unit,
     onCommentClick: () -> Unit,
+    onImageClick: (String) -> Unit = {},
     onDelete: () -> Unit
 ) {
     val isLikedByMe = post.isLikedBy(currentUsername)
@@ -643,15 +688,65 @@ fun PostCard(
                 PostMediaType.IMAGE -> {
                     if (!post.mediaUrl.isNullOrBlank()) {
                         Spacer(modifier = Modifier.height(12.dp))
-                        AsyncImage(
-                            model = post.mediaUrl,
-                            contentDescription = "Imagen de la publicación",
-                            contentScale = ContentScale.Crop,
+                        Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .heightIn(max = 300.dp)
                                 .clip(RoundedCornerShape(14.dp))
-                        )
+                                .background(Color(0xFF141414))
+                                .border(1.dp, Color(0xFF262626), RoundedCornerShape(14.dp))
+                                .clickable { onImageClick(post.mediaUrl) }
+                        ) {
+                            SubcomposeAsyncImage(
+                                model = post.mediaUrl,
+                                contentDescription = "Imagen de la publicación",
+                                contentScale = ContentScale.FillWidth,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 160.dp, max = 460.dp),
+                                loading = {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(200.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        androidx.compose.material3.CircularProgressIndicator(
+                                            modifier = Modifier.size(28.dp),
+                                            color = ChatProTeal,
+                                            strokeWidth = 2.5.dp
+                                        )
+                                    }
+                                },
+                                error = {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(140.dp),
+                                        verticalArrangement = Arrangement.Center,
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Icon(Icons.Default.BrokenImage, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(36.dp))
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text("No se pudo cargar la imagen", color = Color.Gray, fontSize = 12.sp)
+                                    }
+                                }
+                            )
+
+                            // Badge para indicar que se puede ver a tamaño completo
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(8.dp)
+                                    .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.ZoomIn, contentDescription = "Ver completa", tint = Color.White, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Ver completa", color = Color.White, fontSize = 11.sp)
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -1076,3 +1171,61 @@ fun CommentsDialog(
         }
     }
 }
+
+@Composable
+fun FullScreenPhotoDialog(
+    imageUrl: String,
+    onDismiss: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.95f))
+        ) {
+            SubcomposeAsyncImage(
+                model = imageUrl,
+                contentDescription = "Foto en pantalla completa",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(8.dp),
+                loading = {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        androidx.compose.material3.CircularProgressIndicator(
+                            color = ChatProTeal,
+                            strokeWidth = 3.dp
+                        )
+                    }
+                },
+                error = {
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(Icons.Default.BrokenImage, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(48.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("No se pudo cargar la imagen", color = Color.White, fontSize = 14.sp)
+                    }
+                }
+            )
+
+            // Botón de Cerrar en la esquina superior derecha
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp)
+                    .size(44.dp)
+                    .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+            ) {
+                Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.White)
+            }
+        }
+    }
+}
+

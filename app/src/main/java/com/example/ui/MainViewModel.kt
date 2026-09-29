@@ -346,35 +346,37 @@ class MainViewModel : ViewModel() {
     fun sendCommunityPhotoMessage(photoFile: java.io.File, caption: String = "Foto") {
         val me = currentAccount.value?.username ?: return
         viewModelScope.launch {
-            val uploadedUrl = app.cloudStorage.uploadMedia(photoFile, "/chatpro/archivos/")
-            val finalUrl = uploadedUrl ?: photoFile.absolutePath
-            val message = ChatMessage(
-                chatId = "comunidad_general",
-                senderUsername = me,
-                recipientUsername = "comunidad_general",
-                text = caption,
-                type = MessageType.PHOTO,
-                mediaUrl = finalUrl
-            )
-            repository.sendMessage(message)
+            try {
+                val message = ChatMessage(
+                    chatId = "comunidad_general",
+                    senderUsername = me,
+                    recipientUsername = "comunidad_general",
+                    text = caption,
+                    type = MessageType.PHOTO
+                )
+                repository.sendMessage(message, photoFile)
+            } catch (e: Exception) {
+                // If upload to Moodle fails, log error
+            }
         }
     }
 
     fun sendCommunityAudioMessage(audioFile: java.io.File, durationSeconds: Int) {
         val me = currentAccount.value?.username ?: return
         viewModelScope.launch {
-            val uploadedUrl = app.cloudStorage.uploadMedia(audioFile, "/chatpro/archivos/")
-            val finalUrl = uploadedUrl ?: audioFile.absolutePath
-            val message = ChatMessage(
-                chatId = "comunidad_general",
-                senderUsername = me,
-                recipientUsername = "comunidad_general",
-                text = "Nota de voz ($durationSeconds s)",
-                type = MessageType.AUDIO,
-                mediaUrl = finalUrl,
-                audioDurationSeconds = durationSeconds
-            )
-            repository.sendMessage(message)
+            try {
+                val message = ChatMessage(
+                    chatId = "comunidad_general",
+                    senderUsername = me,
+                    recipientUsername = "comunidad_general",
+                    text = "Nota de voz ($durationSeconds s)",
+                    type = MessageType.AUDIO,
+                    audioDurationSeconds = durationSeconds
+                )
+                repository.sendMessage(message, audioFile)
+            } catch (e: Exception) {
+                // If upload to Moodle fails, log error
+            }
         }
     }
 
@@ -480,20 +482,25 @@ class MainViewModel : ViewModel() {
         mediaType: com.example.data.model.PostMediaType = com.example.data.model.PostMediaType.NONE,
         mediaFile: java.io.File? = null,
         audioDurationSeconds: Int = 0,
-        onSuccess: () -> Unit = {}
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
     ) {
         val me = currentAccount.value ?: return
         viewModelScope.launch {
-            repository.createPost(
-                authorUsername = me.username,
-                authorDisplayName = me.displayName,
-                authorAvatarUrl = me.avatarUrl,
-                content = content,
-                mediaType = mediaType,
-                mediaFile = mediaFile,
-                audioDurationSeconds = audioDurationSeconds
-            )
-            onSuccess()
+            try {
+                repository.createPost(
+                    authorUsername = me.username,
+                    authorDisplayName = me.displayName,
+                    authorAvatarUrl = me.avatarUrl,
+                    content = content,
+                    mediaType = mediaType,
+                    mediaFile = mediaFile,
+                    audioDurationSeconds = audioDurationSeconds
+                )
+                onSuccess()
+            } catch (e: Exception) {
+                onError(e.message ?: "Error al subir la publicación a la Moodle.")
+            }
         }
     }
 

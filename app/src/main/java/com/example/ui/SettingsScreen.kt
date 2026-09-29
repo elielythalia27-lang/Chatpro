@@ -76,6 +76,7 @@ fun SettingsScreen(
     val currentAccount by viewModel.currentAccount.collectAsState()
     val accounts by viewModel.accounts.collectAsState()
     val allUsers by viewModel.allUsers.collectAsState()
+    val isConnected by viewModel.isMoodleConnected.collectAsState()
     val currentUser = allUsers.firstOrNull { it.username == currentAccount?.username }
 
     var showAccountsDialog by remember { mutableStateOf(false) }
@@ -316,7 +317,7 @@ fun SettingsScreen(
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("Seguridad y Privacidad", color = ChatProCyan, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Text("Conexión y Almacenamiento Moodle", color = ChatProCyan, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Row(
@@ -326,14 +327,23 @@ fun SettingsScreen(
                     Icon(Icons.Default.Security, contentDescription = null, tint = ChatProTeal)
                     Spacer(modifier = Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Cifrado AES-256", color = ChatProTextPrimary, fontSize = 14.sp)
-                        Text("Activo en chats y almacenamiento", color = ChatProTextSecondary, fontSize = 12.sp)
+                        Text("Moodle Universidad de Cienfuegos", color = ChatProTextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        Text("https://cursos.ucf.edu.cu/ · @julianrene", color = ChatProTextSecondary, fontSize = 12.sp)
+                        Text(
+                            text = if (isConnected) "🟢 En línea · Subida directa sin encriptación" else "🟡 Conectando al servidor…",
+                            color = if (isConnected) ChatProOnlineGreen else Color(0xFFFFB300),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium
+                        )
                     }
-                    Switch(
-                        checked = true,
-                        onCheckedChange = null,
-                        colors = SwitchDefaults.colors(checkedThumbColor = ChatProCyan, checkedTrackColor = ChatProTeal)
-                    )
+                    Button(
+                        onClick = { viewModel.refreshCommunityData() },
+                        colors = ButtonDefaults.buttonColors(containerColor = ChatProTeal),
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Text("Sincronizar", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
 
                 HorizontalDivider(color = Color(0xFF2C2C2C), modifier = Modifier.padding(vertical = 12.dp))

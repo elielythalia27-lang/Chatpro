@@ -24,6 +24,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -392,7 +394,10 @@ fun CommunityChatScreen(
         Surface(
             color = ChatProDarkSurface,
             tonalElevation = 6.dp,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .imePadding()
         ) {
             Row(
                 modifier = Modifier
@@ -456,8 +461,7 @@ fun CommunityChatScreen(
                             val photoToSend = selectedPhotoFile
                             messageText = ""
                             selectedPhotoFile = null
-                            keyboardController?.hide()
-                            focusManager.clearFocus()
+                            // Se mantiene el teclado activo para poder seguir chateando de forma continua
 
                             if (photoToSend != null) {
                                 viewModel.sendCommunityPhotoMessage(photoToSend, textToSend.ifBlank { "Foto" })
