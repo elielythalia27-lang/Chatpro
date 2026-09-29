@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.BrokenImage
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Mic
@@ -66,7 +67,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
+import com.example.util.FileDownloadHelper
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -1214,16 +1218,37 @@ fun FullScreenPhotoDialog(
                 }
             )
 
-            // Botón de Cerrar en la esquina superior derecha
-            IconButton(
-                onClick = onDismiss,
+            // Acciones superiores: Descargar y Cerrar
+            Row(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(16.dp)
-                    .size(44.dp)
-                    .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.White)
+                val context = LocalContext.current
+                val scope = rememberCoroutineScope()
+
+                IconButton(
+                    onClick = {
+                        scope.launch {
+                            FileDownloadHelper.saveImageToGallery(context, imageUrl)
+                        }
+                    },
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                ) {
+                    Icon(Icons.Default.Download, contentDescription = "Descargar foto", tint = Color.White)
+                }
+
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                ) {
+                    Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.White)
+                }
             }
         }
     }

@@ -29,6 +29,7 @@ sealed class UsernameCheckState {
     object Checking : UsernameCheckState()
     object Available : UsernameCheckState()
     object Taken : UsernameCheckState()
+    object Reserved : UsernameCheckState()
 }
 
 enum class NavigationScreen {
@@ -115,11 +116,14 @@ class MainViewModel : ViewModel() {
                 .debounce(300L)
                 .distinctUntilChanged()
                 .collect { username ->
-                    if (username.isBlank() || username.length < 3) {
+                    val clean = username.trim().removePrefix("@")
+                    if (clean.isBlank() || clean.length < 3) {
                         _usernameCheckState.value = UsernameCheckState.Idle
+                    } else if (app.cloudStorage.isReservedAdminUsername(clean)) {
+                        _usernameCheckState.value = UsernameCheckState.Reserved
                     } else {
                         _usernameCheckState.value = UsernameCheckState.Checking
-                        val isAvailable = repository.checkUsernameAvailability(username)
+                        val isAvailable = repository.checkUsernameAvailability(clean)
                         _usernameCheckState.value = if (isAvailable) {
                             UsernameCheckState.Available
                         } else {
@@ -199,10 +203,6 @@ class MainViewModel : ViewModel() {
             onError("El nombre de usuario debe tener al menos 3 caracteres")
             return
         }
-        if (_usernameCheckState.value is UsernameCheckState.Taken) {
-            onError("Este nombre de usuario ya está en uso")
-            return
-        }
 
         viewModelScope.launch {
             val newUser = User(
@@ -210,20 +210,20 @@ class MainViewModel : ViewModel() {
                 displayName = displayName.ifBlank { clean.replaceFirstChar { it.uppercase() } },
                 isOnline = true
             )
-            val success = repository.registerUser(newUser, avatarFile)
+            val (success, errorMsg) = repository.registerUser(newUser, avatarFile)
             if (success) {
                 val session = AccountSession(
                     username = clean,
                     displayName = newUser.displayName,
                     avatarUrl = avatarFile?.absolutePath ?: "",
-                    isAdmin = false
+                    isAdmin = clean.equals("Eliel_21", ignoreCase = true)
                 )
                 app.sessionManager.saveAccount(session)
                 SyncService.start(app)
                 _currentScreen.value = NavigationScreen.HOME
                 onSuccess()
             } else {
-                onError("No se pudo completar el registro. Intenta con otro usuario.")
+                onError(errorMsg ?: "No se pudo completar el registro. Intenta con otro usuario.")
             }
         }
     }

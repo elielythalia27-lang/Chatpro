@@ -113,25 +113,36 @@ class ChatProRepository(
     }
 
     /**
-     * Synchronize with remote cloud storage without relying on mock data.
+     * Sincronización completa con la evidencia de Moodle:
+     * - Descarga los usuarios registrados para mostrar sus nombres y fotos reales
+     * - Descarga las publicaciones del feed con sus fotos, likes y comentarios
+     * - Descarga los mensajes del chat comunitario
      */
     suspend fun syncRemoteData() = withContext(Dispatchers.IO) {
         try {
             val token = cloudStorage.getOrRefreshToken()
             if (token != null) {
-                // Fetch public community messages and posts
+                // 1. Usuarios y avatares reales
+                val remoteUsers = cloudStorage.fetchRemoteUsers()
+                if (remoteUsers.isNotEmpty()) {
+                    database.userDao().insertUsers(remoteUsers.map { UserEntity.fromUser(it) })
+                }
+
+                // 2. Publicaciones del Feed (posts, likes, comentarios)
                 val remotePosts = cloudStorage.fetchRemotePosts()
                 if (remotePosts.isNotEmpty()) {
                     database.postDao().insertPosts(remotePosts.map { PostEntity.fromPost(it) })
                 }
+
+                // 3. Mensajes del Chat Comunitario
                 val remoteCommunityMsgs = cloudStorage.fetchRemoteCommunityMessages()
                 if (remoteCommunityMsgs.isNotEmpty()) {
                     database.messageDao().insertMessages(remoteCommunityMsgs.map { MessageEntity.fromChatMessage(it) })
                 }
-                addLog("SYNC", "Datos sincronizados con éxito.")
+                addLog("SYNC", "Datos sincronizados desde la evidencia de Moodle con éxito.")
             }
         } catch (e: Exception) {
-            // Silently fallback
+            e.printStackTrace()
         }
     }
 
@@ -149,12 +160,11 @@ class ChatProRepository(
     }
 
     suspend fun sendMessage(message: ChatMessage, mediaFile: File? = null) = withContext(Dispatchers.IO) {
-        // Upload to Moodle first (Sin encriptación).
-        // Si no se puede subir o falla la red, lanza una excepción y no guarda en local.
+        // Subir a la evidencia de Moodle
         val uploaded = cloudStorage.uploadCommunityMessage(message, mediaFile)
         val confirmedEntity = MessageEntity.fromChatMessage(uploaded.copy(status = MessageStatus.SENT))
         database.messageDao().insertMessage(confirmedEntity)
-        addLog("CHAT", "Mensaje enviado a la Moodle de la UCF: ${uploaded.text.take(25)}")
+        addLog("CHAT", "Mensaje guardado en la evidencia de Moodle: ${uploaded.text.take(25)}")
     }
 
     suspend fun addReaction(messageId: String, username: String, emoji: String) = withContext(Dispatchers.IO) {
@@ -166,7 +176,24 @@ class ChatProRepository(
         } else {
             updatedReactions[username] = emoji
         }
-        database.messageDao().updateMessage(MessageEntity.fromChatMessage(msg.copy(reactions = updatedReactions)))
+        val updatedMsg = msg.copy(reactions = updatedReactions)
+        database.messageDao().updateMessage(MessageEntity.fromChatMessage(updatedMsg))
+
+        // Si es el chat grupal comunitario, sincronizar a la evidencia en la nube
+        if (msg.chatId == "comunidad_general") {
+            scope.launch(Dispatchers.IO) {
+                try {
+                    val currentMsgs = cloudStorage.fetchRemoteCommunityMessages().toMutableList()
+                    val idx = currentMsgs.indexOfFirst { it.id == messageId }
+                    if (idx != -1) {
+                        currentMsgs[idx] = currentMsgs[idx].copy(reactions = updatedReactions)
+                        cloudStorage.saveRemoteCommunityMessages(currentMsgs)
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
     }
 
     // --- Users & Directory ---
@@ -174,26 +201,35 @@ class ChatProRepository(
         return database.userDao().getAllUsers().map { list -> list.map { it.toUser() } }
     }
 
-    suspend fun registerUser(user: User, avatarFile: File? = null): Boolean = withContext(Dispatchers.IO) {
-        val existing = database.userDao().getUserByUsername(user.username)
-        if (existing != null) return@withContext false
+    suspend fun registerUser(user: User, avatarFile: File? = null): Pair<Boolean, String?> = withContext(Dispatchers.IO) {
+        val clean = user.username.trim().removePrefix("@")
 
+        // 1. Validar nombre de usuario reservado para administración
+        if (cloudStorage.isReservedAdminUsername(clean) && !user.isAdmin) {
+            return@withContext Pair(false, "Este nombre de usuario está reservado para la administración de ChatPro.")
+        }
+
+        // 2. Subir foto de perfil a la EVIDENCIA si se seleccionó una
         var finalAvatarUrl = user.avatarUrl
         if (avatarFile != null && avatarFile.exists()) {
-            val uploadedUrl = cloudStorage.uploadUserAvatar(user.username, avatarFile)
+            val uploadedUrl = cloudStorage.uploadUserAvatar(clean, avatarFile)
             if (!uploadedUrl.isNullOrBlank()) {
                 finalAvatarUrl = uploadedUrl
             }
         }
 
-        val finalUser = user.copy(avatarUrl = finalAvatarUrl)
-        database.userDao().insertUser(UserEntity.fromUser(finalUser))
-        
-        // Sync profile to remote cloud
-        cloudStorage.uploadUserProfile(finalUser)
+        val finalUser = user.copy(username = clean, avatarUrl = finalAvatarUrl)
 
-        addLog("AUTH", "Nuevo usuario registrado: ${finalUser.cleanUsername}")
-        true
+        // 3. Registrar en chatpro_users.json en la evidencia (valida unicidad online)
+        val (success, errorMsg) = cloudStorage.registerUserInEvidence(finalUser)
+        if (!success) {
+            return@withContext Pair(false, errorMsg ?: "Error al registrar el usuario en el servidor.")
+        }
+
+        // 4. Guardar en base de datos local
+        database.userDao().insertUser(UserEntity.fromUser(finalUser))
+        addLog("AUTH", "Nuevo usuario registrado: @$clean")
+        Pair(true, null)
     }
 
     suspend fun updateUserProfile(
@@ -215,7 +251,9 @@ class ChatProRepository(
         var newAvatarUrl = existingUser.avatarUrl
         if (avatarFile != null && avatarFile.exists()) {
             val uploadedUrl = cloudStorage.uploadUserAvatar(username, avatarFile)
-            newAvatarUrl = uploadedUrl ?: avatarFile.absolutePath
+            if (!uploadedUrl.isNullOrBlank()) {
+                newAvatarUrl = uploadedUrl
+            }
         }
 
         val updatedUser = existingUser.copy(
@@ -238,12 +276,12 @@ class ChatProRepository(
             )
         }
 
-        // 3. Upload to remote CloudStorage asynchronously
+        // 3. Upload to remote CloudStorage evidencia
         scope.launch {
             try {
-                cloudStorage.uploadUserProfile(updatedUser)
+                cloudStorage.updateUserInEvidence(updatedUser)
             } catch (e: Exception) {
-                // Ignore remote network error
+                // Ignore
             }
         }
 
@@ -253,9 +291,11 @@ class ChatProRepository(
 
     suspend fun checkUsernameAvailability(username: String): Boolean {
         val clean = username.trim().removePrefix("@")
+        if (cloudStorage.isReservedAdminUsername(clean)) return false
         val local = database.userDao().getUserByUsername(clean)
         if (local != null) return false
-        return cloudStorage.checkUsernameAvailability(clean)
+        val remoteUsers = cloudStorage.fetchRemoteUsers()
+        return remoteUsers.none { it.username.trim().removePrefix("@").equals(clean, ignoreCase = true) }
     }
 
     // --- Statuses (24h) ---
@@ -295,13 +335,12 @@ class ChatProRepository(
             timestamp = System.currentTimeMillis()
         )
 
-        // Upload to Moodle first (Sin encriptación).
-        // Si la subida falla, se lanza una excepción y no se guarda en local para evitar datos falsos.
+        // Subir a la evidencia de Moodle y agregar al chatpro_feed.json global
         val uploaded = cloudStorage.uploadPost(initialPost, mediaFile)
 
-        // Guardar en la base de datos local únicamente tras el éxito online en Moodle
+        // Guardar en Room local
         database.postDao().insertPost(com.example.data.local.PostEntity.fromPost(uploaded))
-        addLog("FEED", "Publicación subida a la Moodle de la UCF por @$authorUsername")
+        addLog("FEED", "Publicación guardada en la evidencia de Moodle por @$authorUsername")
         uploaded
     }
 
@@ -315,6 +354,20 @@ class ChatProRepository(
         }
         val updatedPost = post.copy(likes = updatedLikes)
         database.postDao().updatePost(com.example.data.local.PostEntity.fromPost(updatedPost))
+
+        // Sincronizar actualización de likes a chatpro_feed.json en Moodle
+        scope.launch(Dispatchers.IO) {
+            try {
+                val currentFeed = cloudStorage.fetchRemotePosts().toMutableList()
+                val idx = currentFeed.indexOfFirst { it.id == postId }
+                if (idx != -1) {
+                    currentFeed[idx] = currentFeed[idx].copy(likes = updatedLikes)
+                    cloudStorage.saveRemotePosts(currentFeed)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     suspend fun addCommentToPost(postId: String, comment: com.example.data.model.PostComment) = withContext(Dispatchers.IO) {
@@ -323,6 +376,20 @@ class ChatProRepository(
         val updatedComments = post.comments + comment
         val updatedPost = post.copy(comments = updatedComments)
         database.postDao().updatePost(com.example.data.local.PostEntity.fromPost(updatedPost))
+
+        // Sincronizar nuevo comentario a chatpro_feed.json en Moodle
+        scope.launch(Dispatchers.IO) {
+            try {
+                val currentFeed = cloudStorage.fetchRemotePosts().toMutableList()
+                val idx = currentFeed.indexOfFirst { it.id == postId }
+                if (idx != -1) {
+                    currentFeed[idx] = currentFeed[idx].copy(comments = updatedComments)
+                    cloudStorage.saveRemotePosts(currentFeed)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     suspend fun deleteComment(postId: String, commentId: String) = withContext(Dispatchers.IO) {
@@ -331,10 +398,33 @@ class ChatProRepository(
         val updatedComments = post.comments.filter { it.id != commentId }
         val updatedPost = post.copy(comments = updatedComments)
         database.postDao().updatePost(com.example.data.local.PostEntity.fromPost(updatedPost))
+
+        // Sincronizar eliminación de comentario a chatpro_feed.json en Moodle
+        scope.launch(Dispatchers.IO) {
+            try {
+                val currentFeed = cloudStorage.fetchRemotePosts().toMutableList()
+                val idx = currentFeed.indexOfFirst { it.id == postId }
+                if (idx != -1) {
+                    currentFeed[idx] = currentFeed[idx].copy(comments = updatedComments)
+                    cloudStorage.saveRemotePosts(currentFeed)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     suspend fun deletePost(postId: String) = withContext(Dispatchers.IO) {
         database.postDao().deletePost(postId)
+        scope.launch(Dispatchers.IO) {
+            try {
+                val currentFeed = cloudStorage.fetchRemotePosts().toMutableList()
+                currentFeed.removeAll { it.id == postId }
+                cloudStorage.saveRemotePosts(currentFeed)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
         addLog("FEED", "Publicación eliminada: $postId")
     }
 

@@ -34,6 +34,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhotoLibrary
@@ -278,30 +279,6 @@ fun AuthScreen(viewModel: MainViewModel) {
                     modifier = Modifier.fillMaxWidth(),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    if (registering) {
-                        // Display Name
-                        OutlinedTextField(
-                            value = displayName,
-                            onValueChange = { displayName = it },
-                            label = { Text("Nombre completo") },
-                            leadingIcon = {
-                                Icon(Icons.Default.Person, contentDescription = null, tint = ChatProTeal)
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("register_fullname_input"),
-                            shape = RoundedCornerShape(50),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = ChatProTeal,
-                                unfocusedBorderColor = Color(0xFF333333),
-                                focusedTextColor = Color.White,
-                                unfocusedTextColor = Color.White
-                            ),
-                            singleLine = true
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                    }
-
                     // Username field with real-time live validation
                     OutlinedTextField(
                         value = username,
@@ -311,7 +288,8 @@ fun AuthScreen(viewModel: MainViewModel) {
                                 viewModel.onUsernameInputChanged(it)
                             }
                         },
-                        label = { Text("@usuario") },
+                        label = { Text(if (registering) "@usuario (Identificador único)" else "@usuario") },
+                        placeholder = { if (registering) Text("ejemplo: juan_perez", color = ChatProTextSecondary) },
                         leadingIcon = {
                             Icon(Icons.Default.Person, contentDescription = null, tint = ChatProTeal)
                         },
@@ -332,10 +310,10 @@ fun AuthScreen(viewModel: MainViewModel) {
                                             tint = ChatProOnlineGreen
                                         )
                                     }
-                                    is UsernameCheckState.Taken -> {
+                                    is UsernameCheckState.Taken, is UsernameCheckState.Reserved -> {
                                         Icon(
                                             Icons.Default.Error,
-                                            contentDescription = "Ocupado",
+                                            contentDescription = "No disponible",
                                             tint = ChatProErrorRed
                                         )
                                     }
@@ -348,7 +326,7 @@ fun AuthScreen(viewModel: MainViewModel) {
                             .testTag("auth_username_input"),
                         shape = RoundedCornerShape(50),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = if (registering && usernameCheckState is UsernameCheckState.Taken) ChatProErrorRed else ChatProTeal,
+                            focusedBorderColor = if (registering && (usernameCheckState is UsernameCheckState.Taken || usernameCheckState is UsernameCheckState.Reserved)) ChatProErrorRed else ChatProTeal,
                             unfocusedBorderColor = Color(0xFF333333),
                             focusedTextColor = Color.White,
                             unfocusedTextColor = Color.White
@@ -368,22 +346,30 @@ fun AuthScreen(viewModel: MainViewModel) {
                                 when (usernameCheckState) {
                                     is UsernameCheckState.Checking -> {
                                         Text(
-                                            text = "Verificando disponibilidad…",
+                                            text = "Verificando disponibilidad en el servidor…",
                                             color = ChatProTextSecondary,
                                             fontSize = 12.sp
                                         )
                                     }
                                     is UsernameCheckState.Available -> {
                                         Text(
-                                            text = "✓ Nombre de usuario disponible",
+                                            text = "✓ @$username está disponible",
                                             color = ChatProOnlineGreen,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                    is UsernameCheckState.Reserved -> {
+                                        Text(
+                                            text = "✗ Este nombre de usuario está reservado para el administrador de ChatPro (@Eliel_21)",
+                                            color = ChatProErrorRed,
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.Medium
                                         )
                                     }
                                     is UsernameCheckState.Taken -> {
                                         Text(
-                                            text = "✗ Este nombre de usuario ya está en uso, por favor prueba con otro",
+                                            text = "✗ El usuario @$username ya existe, por favor elige otro",
                                             color = ChatProErrorRed,
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.Medium
@@ -393,6 +379,30 @@ fun AuthScreen(viewModel: MainViewModel) {
                                 }
                             }
                         }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Display Name (Optional)
+                        OutlinedTextField(
+                            value = displayName,
+                            onValueChange = { displayName = it },
+                            label = { Text("Nombre para mostrar (Opcional)") },
+                            placeholder = { Text("Si lo dejas vacío se usará @$username", color = ChatProTextSecondary, fontSize = 13.sp) },
+                            leadingIcon = {
+                                Icon(Icons.Default.Badge, contentDescription = null, tint = ChatProTeal)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("register_fullname_input"),
+                            shape = RoundedCornerShape(50),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = ChatProTeal,
+                                unfocusedBorderColor = Color(0xFF333333),
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White
+                            ),
+                            singleLine = true
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
@@ -431,7 +441,7 @@ fun AuthScreen(viewModel: MainViewModel) {
                     Spacer(modifier = Modifier.height(24.dp))
 
                     // Botón 56dp con degradado horizontal, esquinas de píldora
-                    val isRegisterDisabled = registering && (usernameCheckState is UsernameCheckState.Taken || usernameCheckState is UsernameCheckState.Checking || username.length < 3)
+                    val isRegisterDisabled = registering && (usernameCheckState is UsernameCheckState.Taken || usernameCheckState is UsernameCheckState.Reserved || usernameCheckState is UsernameCheckState.Checking || username.length < 3)
 
                     Button(
                         onClick = {

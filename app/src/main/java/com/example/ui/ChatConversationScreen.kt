@@ -51,9 +51,11 @@ import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
+import com.example.util.FileDownloadHelper
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -71,6 +73,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -104,6 +107,7 @@ import com.example.util.AudioPlayerHelper
 import com.example.util.ImageHelper
 import com.example.util.VoiceRecorderHelper
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -140,6 +144,7 @@ fun ChatConversationScreen(
 
     var textInput by remember { mutableStateOf("") }
     var selectedMessageForReaction by remember { mutableStateOf<ChatMessage?>(null) }
+    var fullImagePreviewUrl by remember { mutableStateOf<String?>(null) }
 
     // Real voice recorder state
     val recorderHelper = remember { VoiceRecorderHelper(context) }
@@ -262,6 +267,7 @@ fun ChatConversationScreen(
                 ChatMessageBubble(
                     message = msg,
                     isMe = isMe,
+                    onImageClick = { fullImagePreviewUrl = it },
                     onLongClick = {
                         selectedMessageForReaction = msg
                     }
@@ -461,6 +467,61 @@ fun ChatConversationScreen(
             }
         }
     }
+
+    // Visor de foto a pantalla completa con botón de descarga
+    if (fullImagePreviewUrl != null) {
+        Dialog(
+            onDismissRequest = { fullImagePreviewUrl = null },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            val context = LocalContext.current
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.95f))
+            ) {
+                AsyncImage(
+                    model = fullImagePreviewUrl,
+                    contentDescription = "Foto ampliada",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(8.dp)
+                )
+
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    val scope = rememberCoroutineScope()
+
+                    IconButton(
+                        onClick = {
+                            scope.launch {
+                                FileDownloadHelper.saveImageToGallery(context, fullImagePreviewUrl!!)
+                            }
+                        },
+                        modifier = Modifier
+                            .size(44.dp)
+                            .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                    ) {
+                        Icon(Icons.Default.Download, contentDescription = "Descargar foto", tint = Color.White)
+                    }
+
+                    IconButton(
+                        onClick = { fullImagePreviewUrl = null },
+                        modifier = Modifier
+                            .size(44.dp)
+                            .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.White)
+                    }
+                }
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -468,6 +529,7 @@ fun ChatConversationScreen(
 fun ChatMessageBubble(
     message: ChatMessage,
     isMe: Boolean,
+    onImageClick: (String) -> Unit = {},
     onLongClick: () -> Unit
 ) {
     val bubbleShape = if (isMe) {
@@ -522,6 +584,7 @@ fun ChatMessageBubble(
                                 .fillMaxWidth()
                                 .heightIn(max = 220.dp)
                                 .clip(RoundedCornerShape(12.dp))
+                                .clickable { onImageClick(message.mediaUrl) }
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         if (message.text.isNotBlank() && message.text != "Foto") {

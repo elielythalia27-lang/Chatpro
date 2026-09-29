@@ -41,7 +41,9 @@ import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Groups
+import com.example.util.FileDownloadHelper
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -133,6 +135,14 @@ fun CommunityChatScreen(
     LaunchedEffect(communityMessages.size) {
         if (communityMessages.isNotEmpty()) {
             listState.animateScrollToItem(communityMessages.size - 1)
+        }
+    }
+
+    // Auto-sync periódico del chat grupal cada 4 segundos
+    LaunchedEffect(Unit) {
+        while (true) {
+            viewModel.refreshCommunityData()
+            delay(4000L)
         }
     }
 
@@ -487,20 +497,54 @@ fun CommunityChatScreen(
 
     // Full Screen Image Dialog
     if (fullImagePreviewUrl != null) {
-        Dialog(onDismissRequest = { fullImagePreviewUrl = null }) {
+        Dialog(
+            onDismissRequest = { fullImagePreviewUrl = null },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+        ) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.9f))
-                    .clickable { fullImagePreviewUrl = null },
-                contentAlignment = Alignment.Center
+                    .background(Color.Black.copy(alpha = 0.95f))
             ) {
                 AsyncImage(
                     model = fullImagePreviewUrl,
                     contentDescription = "Foto ampliada",
                     contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(8.dp)
                 )
+
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    val scope = rememberCoroutineScope()
+
+                    IconButton(
+                        onClick = {
+                            scope.launch {
+                                FileDownloadHelper.saveImageToGallery(context, fullImagePreviewUrl!!)
+                            }
+                        },
+                        modifier = Modifier
+                            .size(44.dp)
+                            .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                    ) {
+                        Icon(Icons.Default.Download, contentDescription = "Descargar foto", tint = Color.White)
+                    }
+
+                    IconButton(
+                        onClick = { fullImagePreviewUrl = null },
+                        modifier = Modifier
+                            .size(44.dp)
+                            .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.White)
+                    }
+                }
             }
         }
     }

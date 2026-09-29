@@ -76,6 +76,9 @@ class CloudStorage(private val context: Context) {
         Types.newParameterizedType(List::class.java, Post::class.java)
     )
     private val userAdapter = moshi.adapter(User::class.java)
+    private val userListAdapter = moshi.adapter<List<User>>(
+        Types.newParameterizedType(List::class.java, User::class.java)
+    )
     private val messageAdapter = moshi.adapter(ChatMessage::class.java)
     private val messageListAdapter = moshi.adapter<List<ChatMessage>>(
         Types.newParameterizedType(List::class.java, ChatMessage::class.java)
@@ -129,6 +132,7 @@ class CloudStorage(private val context: Context) {
     private var cachedSesskey: String? = null
     private var cachedContextId: Long = DEFAULT_CONTEXT_ID
     private val tokenMutex = Mutex()
+    private val evidenceMutex = Mutex()
 
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
@@ -185,8 +189,7 @@ class CloudStorage(private val context: Context) {
     }
 
     /**
-     * Authenticates with Moodle web frontend to grab the active sesskey for evidence management
-     * Method based on the Cuban Moodle client repository (MoodleClient.py)
+     * Obtiene la sesskey activa del usuario en Moodle web frontend para gestionar la evidencia
      */
     private suspend fun getWebSesskey(): String? = withContext(Dispatchers.IO) {
         if (!cachedSesskey.isNullOrBlank()) return@withContext cachedSesskey
@@ -237,23 +240,21 @@ class CloudStorage(private val context: Context) {
     }
 
     /**
-     * Subida de archivos a EVIDENCIA (Core Competency / User Evidence)
-     * Implementación basada en el repositorio https://github.com/venezue95-dev/Et (MoodleClient.py).
-     * Los archivos guardados en evidencias no consumen la cuota de archivos privados del usuario.
+     * Subida de archivos multimedia a EVIDENCIA (SIEMPRE evidence, nunca private files)
      */
     suspend fun uploadMedia(
         file: File,
         remoteFilename: String = file.name,
         onProgress: (Int) -> Unit = {}
     ): String = withContext(Dispatchers.IO) {
-        val token = getOrRefreshToken() 
+        val token = getOrRefreshToken()
             ?: throw IllegalStateException("No hay conexión con la Moodle de la UCF. Verifica tu internet.")
 
         val api = getApi()
 
-        // 1. Obtener draftitemid sin usar vía WS core_files_get_unused_draft_itemid
+        // 1. Obtener draftitemid no utilizado vía WS
         val unusedResp = try { api.getUnusedDraftItemId(token = token) } catch (e: Exception) { null }
-        val draftItemId = unusedResp?.body()?.itemId 
+        val draftItemId = unusedResp?.body()?.itemId
             ?: (System.currentTimeMillis() % 1_000_000_000)
 
         if (unusedResp?.body()?.contextId != null && unusedResp.body()!!.contextId!! > 0) {
@@ -292,58 +293,15 @@ class CloudStorage(private val context: Context) {
             cachedContextId = uploadedItem.contextId
         }
 
-        // 3. Vincular y guardar en Evidencia (user_evidence_edit.php)
-        val evidenceCommitted = commitToEvidence(draftItemId)
+        // 3. Vincular y guardar exclusivamente en la EVIDENCIA
+        commitToEvidence(draftItemId)
 
-        if (evidenceCommitted) {
-            // URL permanente en Core Competency User Evidence
-            "${moodleBaseUrl}webservice/pluginfile.php/$cachedContextId/core_competency/userevidence/$EVIDENCE_ID/$remoteFilename?token=$token"
-        } else {
-            // Fallback transparente a archivos privados si no se pudo acceder al formulario web
-            try {
-                api.savePrivateFiles(token = token, draftItemId = draftItemId)
-            } catch (e: Exception) {
-                // Ignore
-            }
-            "${moodleBaseUrl}webservice/pluginfile.php/$cachedContextId/user/private/$remoteFilename?token=$token"
-        }
+        // URL permanente de descarga en la Evidencia
+        "${moodleBaseUrl}webservice/pluginfile.php/$cachedContextId/core_competency/userevidence/$EVIDENCE_ID/$remoteFilename?token=$token"
     }
 
     /**
-     * Guarda el archivo en la evidencia utilizando el formulario oficial de Moodle
-     * (admin/tool/lp/user_evidence_edit.php) tal como lo hace el cliente Python de venezue95-dev/Et
-     */
-    private suspend fun commitToEvidence(draftItemId: Long): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val sesskey = getWebSesskey() ?: return@withContext false
-
-            val payload = FormBody.Builder()
-                .add("id", EVIDENCE_ID)
-                .add("userid", DEFAULT_USER_ID)
-                .add("sesskey", sesskey)
-                .add("_qf__tool_lp_form_user_evidence", "1")
-                .add("name", "ChatPro Storage")
-                .add("description[text]", "Almacenamiento multimedia ChatPro")
-                .add("description[format]", "1")
-                .add("url", "")
-                .add("files", draftItemId.toString())
-                .add("submitbutton", "Guardar cambios")
-                .build()
-
-            val saveReq = Request.Builder()
-                .url("${moodleBaseUrl}admin/tool/lp/user_evidence_edit.php?id=$EVIDENCE_ID&userid=$DEFAULT_USER_ID&return=list")
-                .post(payload)
-                .build()
-
-            val resp = okHttpClient.newCall(saveReq).execute()
-            resp.isSuccessful || resp.code in 300..399
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    /**
-     * Upload plain unencrypted JSON string to Moodle
+     * Sube un archivo de texto JSON exclusivamente a la EVIDENCIA
      */
     suspend fun uploadTextFile(
         filename: String,
@@ -354,12 +312,16 @@ class CloudStorage(private val context: Context) {
 
         val api = getApi()
 
-        // 1. Prepare draft
-        val prepResponse = api.preparePrivateFiles(token = token)
-        val draftItemId = prepResponse.body()?.draftItemId
-            ?: throw IllegalStateException("Error preparando área de archivos en Moodle.")
+        // 1. Obtener draftitemid
+        val unusedResp = try { api.getUnusedDraftItemId(token = token) } catch (e: Exception) { null }
+        val draftItemId = unusedResp?.body()?.itemId
+            ?: (System.currentTimeMillis() % 1_000_000_000)
 
-        // 2. Upload text content as file
+        if (unusedResp?.body()?.contextId != null && unusedResp.body()!!.contextId!! > 0) {
+            cachedContextId = unusedResp.body()!!.contextId!!
+        }
+
+        // 2. Subir contenido JSON a la zona draft
         val requestBody = content.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
         val filePart = MultipartBody.Part.createFormData("file", filename, requestBody)
         val filepathBody = "/".toRequestBody("text/plain".toMediaTypeOrNull())
@@ -382,22 +344,28 @@ class CloudStorage(private val context: Context) {
             cachedContextId = uploadedItem.contextId
         }
 
-        // 3. Save to private files for fast indexing
-        api.savePrivateFiles(token = token, draftItemId = draftItemId)
+        // 3. Guardar en Evidencia
+        commitToEvidence(draftItemId)
 
-        "${moodleBaseUrl}webservice/pluginfile.php/$cachedContextId/user/private/$filename?token=$token"
+        "${moodleBaseUrl}webservice/pluginfile.php/$cachedContextId/core_competency/userevidence/$EVIDENCE_ID/$filename?token=$token"
     }
 
     /**
-     * Download unencrypted text file content directly from Moodle
+     * Descarga contenido de texto JSON directamente desde la EVIDENCIA (con cache-buster)
      */
     suspend fun downloadTextFile(filename: String): String? = withContext(Dispatchers.IO) {
         try {
             val token = getOrRefreshToken() ?: return@withContext null
-            val url = "${moodleBaseUrl}webservice/pluginfile.php/$cachedContextId/user/private/$filename?token=$token"
-            val response = getApi().descargarArchivo(url)
-            if (response.isSuccessful && response.body() != null) {
-                response.body()!!.string()
+            val url = "${moodleBaseUrl}webservice/pluginfile.php/$cachedContextId/core_competency/userevidence/$EVIDENCE_ID/$filename?token=$token&_t=${System.currentTimeMillis()}"
+            val req = Request.Builder()
+                .url(url)
+                .header("Cache-Control", "no-cache")
+                .build()
+            val resp = okHttpClient.newCall(req).execute()
+            if (resp.isSuccessful && resp.body != null) {
+                val str = resp.body!!.string()
+                // Si Moodle devuelve error json, ignorar
+                if (str.startsWith("{\"error\":") || str.startsWith("{\"exception\":")) null else str
             } else {
                 null
             }
@@ -407,8 +375,131 @@ class CloudStorage(private val context: Context) {
     }
 
     /**
-     * Upload post (publicación) with attached media (photo/audio) and save to Moodle
+     * Vincula el draftitemid a la EVIDENCIA 480 vía formulario oficial
      */
+    private suspend fun commitToEvidence(draftItemId: Long): Boolean = withContext(Dispatchers.IO) {
+        evidenceMutex.withLock {
+            try {
+                val sesskey = getWebSesskey() ?: return@withLock false
+
+                val payload = FormBody.Builder()
+                    .add("id", EVIDENCE_ID)
+                    .add("userid", DEFAULT_USER_ID)
+                    .add("sesskey", sesskey)
+                    .add("_qf__tool_lp_form_user_evidence", "1")
+                    .add("name", "ChatPro Storage")
+                    .add("description[text]", "Almacenamiento multimedia ChatPro")
+                    .add("description[format]", "1")
+                    .add("url", "")
+                    .add("files", draftItemId.toString())
+                    .add("submitbutton", "Guardar cambios")
+                    .build()
+
+                val saveReq = Request.Builder()
+                    .url("${moodleBaseUrl}admin/tool/lp/user_evidence_edit.php?id=$EVIDENCE_ID&userid=$DEFAULT_USER_ID&return=list")
+                    .post(payload)
+                    .build()
+
+                val resp = okHttpClient.newCall(saveReq).execute()
+                resp.isSuccessful || resp.code in 300..399
+            } catch (e: Exception) {
+                false
+            }
+        }
+    }
+
+    // ==========================================
+    // GESTIÓN DE USUARIOS EN EVIDENCE (JSON)
+    // ==========================================
+
+    fun isReservedAdminUsername(username: String): Boolean {
+        val clean = username.trim().removePrefix("@").lowercase()
+        val reserved = listOf(
+            "eliel_21", "eliel21", "eliel", "admin", "administrador",
+            "administrator", "root", "chatpro_admin", "staff", "soporte",
+            "support", "moderador", "moderator", "oficial", "official"
+        )
+        if (clean in reserved) return true
+        if (clean.contains("admin") || clean.contains("soporte") || clean.contains("staff")) return true
+        if (clean.startsWith("eliel")) return true
+        return false
+    }
+
+    suspend fun fetchRemoteUsers(): List<User> = withContext(Dispatchers.IO) {
+        try {
+            val raw = downloadTextFile("chatpro_users.json") ?: return@withContext emptyList()
+            userListAdapter.fromJson(raw) ?: emptyList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    suspend fun saveRemoteUsers(users: List<User>): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val json = userListAdapter.toJson(users)
+            uploadTextFile("chatpro_users.json", json)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    suspend fun registerUserInEvidence(user: User): Pair<Boolean, String?> = withContext(Dispatchers.IO) {
+        val cleanUser = user.username.trim().removePrefix("@").lowercase()
+
+        // 1. Validar nombres reservados
+        if (isReservedAdminUsername(cleanUser) && !user.isAdmin) {
+            return@withContext Pair(false, "Este nombre de usuario está reservado para la administración de ChatPro.")
+        }
+
+        // 2. Verificar existencia en chatpro_users.json
+        val currentUsers = fetchRemoteUsers().toMutableList()
+        val exists = currentUsers.any { it.username.trim().removePrefix("@").equals(cleanUser, ignoreCase = true) }
+        if (exists) {
+            return@withContext Pair(false, "El nombre de usuario @${user.username} ya está registrado. Por favor elige otro.")
+        }
+
+        // 3. Registrar y subir a evidence
+        currentUsers.removeAll { it.username.equals(user.username, ignoreCase = true) }
+        currentUsers.add(user)
+        val success = saveRemoteUsers(currentUsers)
+        if (success) {
+            Pair(true, null)
+        } else {
+            Pair(false, "No se pudo conectar con el servidor para registrar el usuario.")
+        }
+    }
+
+    suspend fun updateUserInEvidence(user: User): Boolean = withContext(Dispatchers.IO) {
+        val currentUsers = fetchRemoteUsers().toMutableList()
+        currentUsers.removeAll { it.username.equals(user.username, ignoreCase = true) }
+        currentUsers.add(user)
+        saveRemoteUsers(currentUsers)
+    }
+
+    // ==========================================
+    // GESTIÓN DE PUBLICACIONES (FEED) EN EVIDENCE
+    // ==========================================
+
+    suspend fun fetchRemotePosts(): List<Post> = withContext(Dispatchers.IO) {
+        try {
+            val raw = downloadTextFile("chatpro_feed.json") ?: return@withContext emptyList()
+            postListAdapter.fromJson(raw) ?: emptyList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    suspend fun saveRemotePosts(posts: List<Post>): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val json = postListAdapter.toJson(posts)
+            uploadTextFile("chatpro_feed.json", json)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     suspend fun uploadPost(
         post: Post,
         mediaFile: File? = null,
@@ -428,27 +519,38 @@ class CloudStorage(private val context: Context) {
 
         val updatedPost = post.copy(mediaUrl = finalMediaUrl)
 
-        // Save individual post metadata to Moodle
-        val postJson = postAdapter.toJson(updatedPost)
-        uploadTextFile("post_${updatedPost.id}.json", postJson)
-
-        // Update centralized feed index on Moodle
-        try {
-            val currentFeed = fetchRemotePosts().toMutableList()
-            currentFeed.removeAll { it.id == updatedPost.id }
-            currentFeed.add(0, updatedPost)
-            val feedJson = postListAdapter.toJson(currentFeed)
-            uploadTextFile("chatpro_feed.json", feedJson)
-        } catch (e: Exception) {
-            // Keep individual post
-        }
+        // Actualizar lista global de posts en evidence
+        val currentFeed = fetchRemotePosts().toMutableList()
+        currentFeed.removeAll { it.id == updatedPost.id }
+        currentFeed.add(0, updatedPost)
+        saveRemotePosts(currentFeed)
 
         updatedPost
     }
 
-    /**
-     * Upload a community chat message to Moodle online
-     */
+    // ==========================================
+    // GESTIÓN DE CHAT GRUPAL (COMMUNITY) EN EVIDENCE
+    // ==========================================
+
+    suspend fun fetchRemoteCommunityMessages(): List<ChatMessage> = withContext(Dispatchers.IO) {
+        try {
+            val raw = downloadTextFile("chatpro_community.json") ?: return@withContext emptyList()
+            messageListAdapter.fromJson(raw) ?: emptyList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    suspend fun saveRemoteCommunityMessages(messages: List<ChatMessage>): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val json = messageListAdapter.toJson(messages)
+            uploadTextFile("chatpro_community.json", json)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     suspend fun uploadCommunityMessage(
         message: ChatMessage,
         mediaFile: File? = null
@@ -466,27 +568,14 @@ class CloudStorage(private val context: Context) {
 
         val updatedMessage = message.copy(mediaUrl = finalMediaUrl)
 
-        // Save individual message to Moodle
-        val msgJson = messageAdapter.toJson(updatedMessage)
-        uploadTextFile("msg_${updatedMessage.id}.json", msgJson)
-
-        // Update community message index on Moodle
-        try {
-            val currentMsgs = fetchRemoteCommunityMessages().toMutableList()
-            currentMsgs.removeAll { it.id == updatedMessage.id }
-            currentMsgs.add(updatedMessage)
-            val listJson = messageListAdapter.toJson(currentMsgs)
-            uploadTextFile("chatpro_community.json", listJson)
-        } catch (e: Exception) {
-            // Keep uploaded message
-        }
+        val currentMsgs = fetchRemoteCommunityMessages().toMutableList()
+        currentMsgs.removeAll { it.id == updatedMessage.id }
+        currentMsgs.add(updatedMessage)
+        saveRemoteCommunityMessages(currentMsgs)
 
         updatedMessage
     }
 
-    /**
-     * Upload user avatar to Moodle
-     */
     suspend fun uploadUserAvatar(
         username: String,
         avatarFile: File,
@@ -494,42 +583,5 @@ class CloudStorage(private val context: Context) {
     ): String = withContext(Dispatchers.IO) {
         val remoteName = "avatar_${username}_${System.currentTimeMillis()}.jpg"
         uploadMedia(avatarFile, remoteName, onProgress)
-    }
-
-    /**
-     * Upload user profile JSON to Moodle
-     */
-    suspend fun uploadUserProfile(user: User): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val json = userAdapter.toJson(user)
-            val filename = "user_${user.username}.json"
-            uploadTextFile(filename, json)
-            true
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    suspend fun fetchRemotePosts(): List<Post> = withContext(Dispatchers.IO) {
-        try {
-            val raw = downloadTextFile("chatpro_feed.json") ?: return@withContext emptyList()
-            postListAdapter.fromJson(raw) ?: emptyList()
-        } catch (e: Exception) {
-            emptyList()
-        }
-    }
-
-    suspend fun fetchRemoteCommunityMessages(): List<ChatMessage> = withContext(Dispatchers.IO) {
-        try {
-            val raw = downloadTextFile("chatpro_community.json") ?: return@withContext emptyList()
-            messageListAdapter.fromJson(raw) ?: emptyList()
-        } catch (e: Exception) {
-            emptyList()
-        }
-    }
-
-    suspend fun checkUsernameAvailability(username: String): Boolean = withContext(Dispatchers.IO) {
-        val clean = username.trim().removePrefix("@").lowercase()
-        clean.length >= 3
     }
 }
